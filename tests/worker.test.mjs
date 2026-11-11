@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';import{readFile}from'node:fs/promises';
+const source=await readFile(new URL('../dist/server/index.js',import.meta.url),'utf8');const {default:worker}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+class Bucket{constructor(){this.map=new Map();this.counter=0}async get(key){const row=this.map.get(key);if(!row)return null;return{etag:row.etag,httpEtag:'"'+row.etag+'"',json:async()=>JSON.parse(row.text),text:async()=>row.text,body:row.bytes??row.text,writeHttpMetadata:headers=>headers.set('content-type',row.metadata.contentType)}}async put(key,value,options={}){const current=this.map.get(key);if(options.onlyIf?.etagMatches&&current?.etag!==options.onlyIf.etagMatches)return null;if(options.onlyIf?.etagDoesNotMatch==='*'&&current)return null;const etag='v'+(++this.counter);this.map.set(key,{text:typeof value==='string'?value:'',bytes:typeof value==='string'?null:value,etag,metadata:options.httpMetadata||{}});return{etag}}}
+const env={BUCKET:new Bucket()},base='https://jess.example';
+const headers={'oai-authenticated-user-id':'verified-owner','oai-authenticated-user-email':'jesslee5202@gmail.com',origin:base};
+const request=(path,init={})=>worker.fetch(new Request(base+path,init),env);
+const mutate=(path,data,extra={})=>request(path,{method:'POST',headers:{...headers,'content-type':'application/json',...extra},body:JSON.stringify(data)});
+let response=await request('/api/listings'),data=await response.json();assert.equal(response.status,200);assert.equal(data.records.length,30);assert(data.records.every(p=>p.status==='published'&&p.url.startsWith('/property/')));
+assert.equal((await request('/api/admin/records')).status,403);assert.equal((await request('/api/admin/records',{headers:{...headers,'oai-authenticated-user-email':'someone@example.com'}})).status,403);
+assert.equal((await request('/admin')).status,200);assert((await(await request('/admin')).text()).includes('/signin-with-chatgpt?return_to='));assert.equal((await request('/admin',{headers:{...headers,'oai-authenticated-user-email':'other@example.com'}})).status,403);assert((await(await request('/admin',{headers})).text()).includes('新增房源'));
+const record={title:'Taman Test <script>alert(1)</script>',location:'Johor Bahru',price:650000,mode:'Buy',category:'Residential',type:'2-sty Terrace/Link House',beds:'3+1',baths:3,size:'',landSize:'20 x 65',tenure:'Freehold',description:'Test description',images:[],features:['unblocked-view','gated-guarded'],sourceUrl:'',status:'draft'};
+assert.equal((await mutate('/api/admin/records',{record,expectedRevision:0},{origin:'https://attacker.example'})).status,403);
+response=await mutate('/api/admin/records',{record:{...record,price:-1},expectedRevision:0});assert.equal(response.status,400);assert.equal(env.BUCKET.map.size,0);
+response=await mutate('/api/admin/records',{record,expectedRevision:0});assert.equal(response.status,201);data=await response.json();const id=data.record.id;const createdAt=data.record.createdAt;assert(Number.isFinite(Date.parse(createdAt)));assert.equal(data.revision,1);assert.equal(data.record.size,null);assert.deepEqual(data.record.features,['unblocked-view','gated-guarded']);assert.equal((await(await request('/api/listings')).json()).records.length,30);
+response=await request('/api/admin/records',{headers});data=await response.json();assert.equal(data.records.length,31);assert(data.records.some(p=>p.id===id&&p.status==='draft'));
+assert.equal((await request('/property/'+id)).status,404);
+response=await mutate('/api/admin/records/'+id+'/status',{status:'published',expectedRevision:1});assert.equal(response.status,200);assert.equal((await(await request('/api/listings')).json()).records.length,31);
+const detail=await(await request('/property/'+id)).text();assert(detail.includes('&lt;script&gt;'));assert(!detail.includes('<script>alert(1)</script>'));
+assert.equal((await mutate('/api/admin/records/'+id+'/status',{status:'archived',expectedRevision:1})).status,409);
+assert.equal((await mutate('/api/admin/records/'+id+'/status',{status:'archived',expectedRevision:2})).status,200);assert.equal((await(await request('/api/listings')).json()).records.length,30);assert.equal((await request('/property/'+id)).status,404);
+const form=new FormData();form.set('photo',new Blob([new Uint8Array([255,216,255,0,0,0])],{type:'image/jpeg'}),'test.jpg');response=await request('/api/admin/photos',{method:'POST',headers,body:form});assert.equal(response.status,201);const photo=(await response.json()).url;assert(photo.startsWith('/media/'));response=await request(photo);assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/jpeg');assert.equal((await response.arrayBuffer()).byteLength,6);
+const invalidPhoto=new FormData();invalidPhoto.set('photo',new Blob(['<svg onload=alert(1)>'],{type:'image/svg+xml'}),'bad.svg');assert.equal((await request('/api/admin/photos',{method:'POST',headers,body:invalidPhoto})).status,400);
+assert.equal((await mutate('/api/admin/records',{record:{...record,images:['javascript:alert(1)']},expectedRevision:3})).status,400);
+assert.equal((await mutate('/api/admin/records',{record:{...record,features:['invented-feature']},expectedRevision:3})).status,400);
+const saved=await request('/api/admin/records',{headers});const revision=(await saved.json()).revision;assert.equal(revision,3);
+const loaded=await request('/api/listings');assert.equal((await loaded.json()).records.length,30);assert.equal((await worker.fetch(new Request(base+'/api/listings'),{})).status,503);
+console.log('PASS: owner-only pages/API, same-origin checks, validation, durable create/read/update/archive, drafts hidden, concurrency rejection, escaped detail HTML, image upload/readback and unsafe upload rejection.');
+
+const edited=await mutate('/api/admin/records',{record:{...record,id,createdAt:'2000-01-01T00:00:00Z'},expectedRevision:3});
+assert.equal(edited.status,201);assert.equal((await edited.json()).record.createdAt,createdAt);
+const legacy=await mutate('/api/admin/records',{record:{...record,id:'legacy-record'},expectedRevision:4});
+assert.equal(legacy.status,201);
+const catalog=await(await request('/api/admin/records',{headers})).json();
+const seed=catalog.records.find(p=>p.id!==id&&p.id!=='legacy-record');
+const legacyEdit=await mutate('/api/admin/records',{record:{...seed,createdAt:'2000-01-01T00:00:00Z'},expectedRevision:5});
+assert.equal(legacyEdit.status,201);assert.equal((await legacyEdit.json()).record.createdAt,null);
+console.log('PASS: creation time recorded by server, preserved across edits, client timestamp ignored, legacy upload time stays unknown.');

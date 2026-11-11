@@ -1,0 +1,15 @@
+import {readFile,mkdir,writeFile,rm} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const root=resolve(import.meta.dirname,'..');
+const [publicHTML,adminHTML,seed,worker,manifest]=await Promise.all(['web/index.html','web/admin.html','web/seed.json','worker/index.js','.openai/hosting.json'].map(p=>readFile(resolve(root,p),'utf8')));
+const shared=await readFile(resolve(root,'web/property-filters.mjs'),'utf8');
+const inlineShared=shared.replace(/^export /gm,'');
+const completePublicHTML=publicHTML.replace('/* PROPERTY_FILTERS */',inlineShared);
+const parser=await readFile(resolve(root,'web/parse-property-copy.mjs'),'utf8');
+if(!adminHTML.includes('/* COPY_PARSER */'))throw new Error('Copy parser insertion point missing');
+const completeAdminHTML=adminHTML.replace('/* PROPERTY_FILTERS */',inlineShared).replace('/* COPY_PARSER */',parser.replace(/^import .*?;\n/gm,'').replace(/^export /gm,''));
+const config=JSON.parse(manifest);if(config.static)throw new Error('Remove static configuration for Worker deployment');
+const records=JSON.parse(seed);if(!Array.isArray(records)||records.length!==new Set(records.map(p=>p.id)).size)throw new Error('Invalid initial inventory');
+const source='const PUBLIC_HTML='+JSON.stringify(completePublicHTML)+';\nconst ADMIN_HTML='+JSON.stringify(completeAdminHTML)+';\nconst SEED_RECORDS='+JSON.stringify(records)+';\nconst OWNER_EMAIL="jesslee5202@gmail.com";\n'+inlineShared+'\n'+worker;
+await rm(resolve(root,'dist'),{recursive:true,force:true});await mkdir(resolve(root,'dist/server'),{recursive:true});await mkdir(resolve(root,'dist/.openai'),{recursive:true});await writeFile(resolve(root,'dist/server/index.js'),source);await writeFile(resolve(root,'dist/.openai/hosting.json'),manifest);
+console.log('Built Worker with embedded public/admin pages and '+records.length+' initial properties.');

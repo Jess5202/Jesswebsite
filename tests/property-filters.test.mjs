@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {detectPropertyFeatures,getPropertyFeatures,getPropertyGroup,matchesPropertyFilters,getLocationLabel} from '../web/property-filters.mjs';
+import {parsePropertyCopy} from '../web/parse-property-copy.mjs';
+const sample='FOR SALE｜TAMAN SETIA INDAH\nDOUBLE STOREY TERRACE HOUSE 双层排屋\nRM658K Nego｜Bank Value RM730K++\n📍 Taman Setia Indah, 81100 Johor Bahru\nUnblocked Garden View 花园景观无遮挡\nGated & Guarded 有围篱及保安\nLand Size: 20’ × 65’\n3 Bedrooms\n3 Bathrooms\nFreehold 永久地契\nJS3128';
+const result=parsePropertyCopy(sample);assert.deepEqual(result.fields.features,['unblocked-view','gated-guarded']);
+assert.deepEqual(detectPropertyFeatures('UnblockView'),['unblocked-view']);assert.deepEqual(detectPropertyFeatures('Gated & Guarded: No\nNo unblocked view\nUnfurnished\nNot renovated\nNot a corner lot'),[]);
+assert.deepEqual(detectPropertyFeatures('Garden view\n原装'),[]);assert.deepEqual(detectPropertyFeatures('Corner Lot\nFully Renovated\nPartly Furnished'),['corner-lot','renovated','furnished']);
+assert.deepEqual(getPropertyFeatures({features:[],description:sample}),[]);assert.deepEqual(getPropertyFeatures({description:sample}),['unblocked-view','gated-guarded']);
+const property={...result.fields,price:658000,mode:'Buy',category:'Residential',beds:'3',tenure:'Freehold 永久地契'};
+assert.equal(getPropertyGroup(property),'double');assert.equal(getPropertyGroup({type:'1-sty Terrace/Link House'}),'single');assert.equal(getPropertyGroup({type:'1.5-sty Terrace/Link House'}),'other');assert.equal(getPropertyGroup({type:'Condominium'}),'condo');
+assert(matchesPropertyFilters(property,{type:'double',features:['unblocked-view','gated-guarded']}));assert(!matchesPropertyFilters(property,{type:'single',features:['unblocked-view']}));assert(!matchesPropertyFilters(property,{features:['unblocked-view','corner-lot']}));
+assert(matchesPropertyFilters(property,{minPrice:658000,maxPrice:658000,minBeds:3,tenure:'freehold',location:property.location,mode:'Buy'}));assert(!matchesPropertyFilters(property,{maxPrice:650000}));assert(!matchesPropertyFilters(property,{mode:'Rent'}));assert(!matchesPropertyFilters(property,{tenure:'leasehold'}));assert(!matchesPropertyFilters(property,{minBeds:4}));
+assert(matchesPropertyFilters({...property,beds:'3+1'},{minBeds:4}));assert(!matchesPropertyFilters({...property,beds:null},{minBeds:1}));
+for(const query of ['UnblockView','无遮挡','双层','Double Storey','G&G','JS3128'])assert(matchesPropertyFilters({...property,reference:'JS3128'},{query}),query);
+assert(!matchesPropertyFilters(property,{location:'Skudai'}));
+console.log('PASS: bilingual feature inference, negative/unknown features, explicit owner overrides, floor groups, all-selected matching, price/rooms/tenure/location filters and UnblockView/Chinese searches.');
+
+assert.equal(getLocationLabel('Jalan Jaya Putra @ Austin Crest'),'Austin Crest');
+assert.equal(getLocationLabel('Taman Setia Indah, 81100 Johor Bahru'),'Setia Indah');
+assert.equal(getLocationLabel('Jalan Indah 19, Taman Bukit Indah, 81200 Johor Bahru'),'Bukit Indah');
+assert.equal(getLocationLabel('Tmn. Mount Austin, Johor Bahru'),'Mount Austin');
+assert.equal(getLocationLabel('Horizon Hills'),'Horizon Hills');
+assert.equal(getLocationLabel('81100 Johor Bahru'),'Johor Bahru');
+console.log('PASS: concise area names remove street prefixes/postcodes while retaining Austin Crest, Setia Indah and other neighbourhood names.');
+
+for(const [input,expected] of [['EcoSummer','Eco Summer'],['eco summer','Eco Summer'],['Austin Crest Emerald 1','Austin Crest'],['Horizon Hills Gateways','Horizon Hills'],['Setia Tropika, Johor Bahru','Setia Tropika']])assert.equal(getLocationLabel(input),expected);
+assert(matchesPropertyFilters({location:'Austin Crest Emerald 1'},{location:'Austin Crest'}));
+assert(matchesPropertyFilters({location:'EcoSummer'},{location:'Eco Summer'}));
+assert(!matchesPropertyFilters({location:'Eco Spring'},{location:'Eco Summer'}));
+assert.equal(new Set(['EcoSummer','Eco Summer','eco summer'].map(getLocationLabel)).size,1);
+console.log('PASS: canonical area names deduplicated and grouped filters match all variants.');

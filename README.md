@@ -2,12 +2,14 @@
 
 Live website: https://jessjbproperty.my
 
-Property manager: https://jess-jb-property.helpfulbagel1.chatgpt.site/admin
+Admin: https://jess-jb-property.helpfulbagel1.chatgpt.site/admin
 
-This repository backs up the website source. The live site runs on ChatGPT Sites with a Cloudflare Worker and persistent object storage. GitHub Pages cannot run the property manager, image uploads, or authenticated API. Pushing to this repository does not automatically publish to Sites.
+This public repository is a source backup. Production is hosted on ChatGPT Sites using a Cloudflare Worker and persistent object storage. GitHub Pages cannot run the property-management backend. Pushing to GitHub does not automatically deploy to Sites.
 
 Build: `node scripts/build.mjs`
 
-Checks: `node scripts/validate-artifact.mjs`, `node tests/worker.test.mjs`, `node tests/property-filters.test.mjs`, `node tests/copy-parser.test.mjs`.
+Validate: `node scripts/validate-artifact.mjs`
 
-Live property records and uploaded photos are stored separately in the existing Sites storage and are not a part of this source backup. Do not replace that catalog with web/seed.json. Owner authentication depends on trusted Sites identity headers and must be replaced before moving the backend to another host.
+Tests: `node tests/worker.test.mjs`, `node tests/property-filters.test.mjs`, `node tests/copy-parser.test.mjs`.
+
+Live inventory and uploaded photos remain in Sites storage and are not backed up here. Never replace the live catalog with web/seed.json. Owner authentication relies on trusted Sites identity headers; it must be replaced before moving the backend to another host.
